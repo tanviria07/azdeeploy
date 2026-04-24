@@ -1,0 +1,26 @@
+[build-system]
+requires = ["poetry-core>=1.8.0"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.poetry]
+name = "azdeeploy"
+version = "0.1.0"
+description = "CLI toolkit for deployment diagnostics, Azure helpers, and LLM-assisted fixes."
+authors = ["Tanvi <tanvi@example.com>"]
+readme = "README.md"
+packages = [{ include = "azdeeploy" }]
+
+[tool.poetry.dependencies]
+python = "^3.11"
+typer = "^0.16.0"
+rich = "^14.0.0"
+pydantic = "^2.11.0"
+pydantic-settings = "^2.8.0"
+openai = "^1.76.0"
+python-dotenv = "^1.0.1"
+
+[tool.poetry.scripts]
+azdeeploy = "azdeeploy.cli:app"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
