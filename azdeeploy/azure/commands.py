@@ -49,7 +49,11 @@ def _matches_prefix(cmd: str, prefixes: set[str]) -> bool:
     return any(normalized.startswith(prefix) for prefix in prefixes)
 
 
-def run_az(cmd: str, skip_confirmation: bool = False) -> subprocess.CompletedProcess[str]:
+def run_az(
+    cmd: str,
+    skip_confirmation: bool = False,
+    stream_output: bool = False,
+) -> subprocess.CompletedProcess[str]:
     """Run a guarded Azure CLI command."""
     if _matches_prefix(cmd, BLOCKED):
         raise RuntimeError(f"Blocked Azure command: {cmd}")
@@ -61,12 +65,14 @@ def run_az(cmd: str, skip_confirmation: bool = False) -> subprocess.CompletedPro
 
     result = subprocess.run(
         shlex.split(cmd),
-        capture_output=True,
+        capture_output=not stream_output,
         text=True,
         check=False,
     )
     if result.returncode != 0:
-        error = result.stderr.strip() or result.stdout.strip() or "Unknown Azure CLI error."
+        stderr = (result.stderr or "").strip()
+        stdout = (result.stdout or "").strip()
+        error = stderr or stdout or "Unknown Azure CLI error."
         raise RuntimeError(f"Azure command failed: {cmd}\n{error}")
     return result
 

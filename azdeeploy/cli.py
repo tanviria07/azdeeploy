@@ -12,6 +12,7 @@ from rich.prompt import Prompt
 from azdeeploy import __version__
 from azdeeploy.azure.app_service import deployment_target_names, generate_deployment_plan
 from azdeeploy.azure.commands import check_azure_login, run_az
+from azdeeploy.azure.logs import get_recent_logs, tail_logs
 from azdeeploy.config import load_config
 from azdeeploy.scanner.detect_project import DetectionError, scan_project
 
@@ -194,9 +195,37 @@ def deploy() -> None:
 
 
 @app.command()
-def logs() -> None:
-    """Placeholder logs command."""
-    _not_implemented("logs")
+def logs(
+    tail: bool = typer.Option(True, "--tail/--no-tail", help="Stream logs live or fetch a recent slice."),
+    lines: int = typer.Option(100, min=1, help="Number of recent lines to fetch when not tailing."),
+    resource_group: str | None = typer.Option(None, help="Azure resource group name."),
+    app_name: str | None = typer.Option(None, help="Azure Web App name."),
+) -> None:
+    """View Azure App Service logs."""
+    names = deployment_target_names()
+    resolved_resource_group = resource_group or names["resource_group"]
+    resolved_app_name = app_name or names["app_name"]
+
+    try:
+        check_azure_login()
+        if tail:
+            console.print(
+                f"[cyan]Tailing logs for {resolved_resource_group}/{resolved_app_name}...[/cyan]"
+            )
+            tail_logs(resolved_resource_group, resolved_app_name)
+            return
+
+        log_text = get_recent_logs(resolved_resource_group, resolved_app_name, lines=lines)
+        console.print(
+            Panel(
+                log_text.rstrip() or "No log output returned.",
+                title=f"Recent Logs ({lines} lines)",
+                border_style="cyan",
+            )
+        )
+    except RuntimeError as exc:
+        console.print(Panel(str(exc), title="Logs Failed", border_style="red"))
+        raise typer.Exit(code=1) from exc
 
 
 @app.command()
