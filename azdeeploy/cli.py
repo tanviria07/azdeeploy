@@ -6,9 +6,12 @@ import typer
 from openai import OpenAI
 from rich.console import Console
 from rich.panel import Panel
+from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn
 from rich.prompt import Prompt
 
 from azdeeploy import __version__
+from azdeeploy.azure.app_service import deployment_target_names, generate_deployment_plan
+from azdeeploy.azure.commands import check_azure_login, run_az
 from azdeeploy.config import load_config
 from azdeeploy.scanner.detect_project import DetectionError, scan_project
 
@@ -122,14 +125,72 @@ def scan() -> None:
 
 @app.command()
 def plan() -> None:
-    """Placeholder plan command."""
-    _not_implemented("plan")
+    """Generate an Azure App Service deployment plan."""
+    try:
+        project_info = scan_project()
+        steps = generate_deployment_plan(project_info)
+    except DetectionError as exc:
+        console.print(Panel(str(exc), title="Plan Failed", border_style="red"))
+        raise typer.Exit(code=1) from exc
+    except ValueError as exc:
+        console.print(Panel(str(exc), title="Plan Failed", border_style="red"))
+        raise typer.Exit(code=1) from exc
+
+    console.print(Panel(f"Project type: {project_info['project_type']}", title="Deployment Plan"))
+    for index, step in enumerate(steps, start=1):
+        console.print(f"{index}. {step['description']}")
+        console.print(f"   [bold green]{step['command']}[/bold green]")
 
 
 @app.command()
 def deploy() -> None:
-    """Placeholder deploy command."""
-    _not_implemented("deploy")
+    """Deploy the current project to Azure App Service."""
+    try:
+        project_info = scan_project()
+        steps = generate_deployment_plan(project_info)
+        names = deployment_target_names()
+        check_azure_login()
+    except DetectionError as exc:
+        console.print(Panel(str(exc), title="Deploy Failed", border_style="red"))
+        raise typer.Exit(code=1) from exc
+    except ValueError as exc:
+        console.print(Panel(str(exc), title="Deploy Failed", border_style="red"))
+        raise typer.Exit(code=1) from exc
+    except RuntimeError as exc:
+        console.print(Panel(str(exc), title="Azure Login Failed", border_style="red"))
+        raise typer.Exit(code=1) from exc
+
+    try:
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TaskProgressColumn(),
+            console=console,
+        ) as progress:
+            task_id = progress.add_task("Running deployment steps", total=len(steps))
+            for step in steps:
+                progress.update(task_id, description=step["description"])
+                run_az(step["command"])
+                progress.advance(task_id)
+    except RuntimeError as exc:
+        console.print(Panel(str(exc), title="Deployment Failed", border_style="red"))
+        raise typer.Exit(code=1) from exc
+
+    try:
+        result = run_az(
+            (
+                f"az webapp show --resource-group {names['resource_group']} "
+                f"--name {names['app_name']} --query defaultHostName -o tsv"
+            ),
+            skip_confirmation=True,
+        )
+    except RuntimeError as exc:
+        console.print(Panel(str(exc), title="Deployment Succeeded, URL Lookup Failed", border_style="yellow"))
+        raise typer.Exit(code=1) from exc
+
+    host_name = result.stdout.strip()
+    console.print(f"[green]Deployment complete:[/green] https://{host_name}")
 
 
 @app.command()
