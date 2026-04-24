@@ -5,10 +5,12 @@ from pathlib import Path
 import typer
 from openai import OpenAI
 from rich.console import Console
+from rich.panel import Panel
 from rich.prompt import Prompt
 
 from azdeeploy import __version__
 from azdeeploy.config import load_config
+from azdeeploy.scanner.detect_project import DetectionError, scan_project
 
 app = typer.Typer(help="Deployment diagnostics and Azure helper CLI.")
 console = Console()
@@ -82,8 +84,40 @@ def _not_implemented(command_name: str) -> None:
 
 @app.command()
 def scan() -> None:
-    """Placeholder scan command."""
-    _not_implemented("scan")
+    """Scan the current directory for a supported app entrypoint."""
+    try:
+        result = scan_project()
+    except DetectionError as exc:
+        console.print(Panel(str(exc), title="Scan Failed", border_style="red"))
+        raise typer.Exit(code=1) from exc
+
+    body_lines = [
+        f"Project type: {result['project_type']}",
+    ]
+
+    if result.get("main_file"):
+        body_lines.append(f"Main file: {result['main_file']}")
+    if result.get("entry_file") and result["entry_file"] != result.get("main_file"):
+        body_lines.append(f"Entry file: {result['entry_file']}")
+    if result.get("app_object"):
+        body_lines.append(f"App object: {result['app_object']}")
+
+    body_lines.append("")
+    body_lines.append(f"Startup: [bold green]{result['recommended_startup']}[/bold green]")
+
+    issues = result.get("potential_issues", [])
+    if issues:
+        body_lines.append("")
+        body_lines.append("[yellow]Warnings:[/yellow]")
+        body_lines.extend(f"[yellow]- {issue}[/yellow]" for issue in issues)
+
+    console.print(
+        Panel(
+            "\n".join(body_lines),
+            title="Project Scan",
+            border_style="cyan",
+        )
+    )
 
 
 @app.command()
