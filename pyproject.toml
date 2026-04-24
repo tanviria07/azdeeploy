@@ -20,7 +20,7 @@ openai = "^1.76.0"
 python-dotenv = "^1.0.1"
 
 [tool.poetry.scripts]
-azdeeploy = "azdeeploy.cli:app"
+azdeeploy = "azdeeploy.cli:azdeeploy"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
