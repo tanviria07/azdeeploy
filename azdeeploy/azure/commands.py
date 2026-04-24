@@ -5,10 +5,13 @@ from __future__ import annotations
 import json
 import shlex
 import subprocess
+from pathlib import Path
 
 from rich.console import Console
 
 console = Console()
+LAST_AZURE_ERROR_FILE = Path(".azdeeploy_last_error.txt")
+_LAST_AZURE_ERROR = ""
 
 ALLOWED_READONLY = {
     "az account show",
@@ -55,6 +58,7 @@ def run_az(
     stream_output: bool = False,
 ) -> subprocess.CompletedProcess[str]:
     """Run a guarded Azure CLI command."""
+    global _LAST_AZURE_ERROR
     if _matches_prefix(cmd, BLOCKED):
         raise RuntimeError(f"Blocked Azure command: {cmd}")
 
@@ -73,8 +77,19 @@ def run_az(
         stderr = (result.stderr or "").strip()
         stdout = (result.stdout or "").strip()
         error = stderr or stdout or "Unknown Azure CLI error."
+        _LAST_AZURE_ERROR = f"Command: {cmd}\n{error}"
+        LAST_AZURE_ERROR_FILE.write_text(_LAST_AZURE_ERROR, encoding="utf-8")
         raise RuntimeError(f"Azure command failed: {cmd}\n{error}")
     return result
+
+
+def get_last_azure_error() -> str:
+    """Return the last recorded Azure CLI failure, if any."""
+    if _LAST_AZURE_ERROR:
+        return _LAST_AZURE_ERROR
+    if LAST_AZURE_ERROR_FILE.exists():
+        return LAST_AZURE_ERROR_FILE.read_text(encoding="utf-8", errors="ignore").strip()
+    return ""
 
 
 def check_azure_login() -> subprocess.CompletedProcess[str]:

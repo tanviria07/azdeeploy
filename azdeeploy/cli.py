@@ -11,7 +11,8 @@ from rich.prompt import Prompt
 
 from azdeeploy import __version__
 from azdeeploy.azure.app_service import deployment_target_names, generate_deployment_plan
-from azdeeploy.azure.commands import check_azure_login, run_az
+from azdeeploy.azure.commands import check_azure_login, get_last_azure_error, run_az
+from azdeeploy.azure.deepseek_client import diagnose as run_diagnosis
 from azdeeploy.azure.logs import get_recent_logs, tail_logs
 from azdeeploy.config import load_config
 from azdeeploy.scanner.detect_project import DetectionError, scan_project
@@ -86,15 +87,28 @@ def _not_implemented(command_name: str) -> None:
     console.print(f"{command_name}: Not implemented yet")
 
 
-@app.command()
-def scan() -> None:
-    """Scan the current directory for a supported app entrypoint."""
-    try:
-        result = scan_project()
-    except DetectionError as exc:
-        console.print(Panel(str(exc), title="Scan Failed", border_style="red"))
-        raise typer.Exit(code=1) from exc
+def _read_key_files() -> dict[str, str]:
+    """Read a few high-signal project files for diagnosis context."""
+    key_files: dict[str, str] = {}
+    for name in (
+        "requirements.txt",
+        "pyproject.toml",
+        "setup.py",
+        "main.py",
+        "app.py",
+        "run.py",
+        "api.py",
+        "package.json",
+        ".env.azure",
+    ):
+        path = Path.cwd() / name
+        if path.exists():
+            key_files[name] = path.read_text(encoding="utf-8", errors="ignore")
+    return key_files
 
+
+def _render_scan_result(result: dict[str, object]) -> None:
+    """Render a scan result using a Rich panel."""
     body_lines = [
         f"Project type: {result['project_type']}",
     ]
@@ -115,13 +129,19 @@ def scan() -> None:
         body_lines.append("[yellow]Warnings:[/yellow]")
         body_lines.extend(f"[yellow]- {issue}[/yellow]" for issue in issues)
 
-    console.print(
-        Panel(
-            "\n".join(body_lines),
-            title="Project Scan",
-            border_style="cyan",
-        )
-    )
+    console.print(Panel("\n".join(body_lines), title="Project Scan", border_style="cyan"))
+
+
+@app.command()
+def scan() -> None:
+    """Scan the current directory for a supported app entrypoint."""
+    try:
+        result = scan_project()
+    except DetectionError as exc:
+        console.print(Panel(str(exc), title="Scan Failed", border_style="red"))
+        raise typer.Exit(code=1) from exc
+
+    _render_scan_result(result)
 
 
 @app.command()
@@ -229,9 +249,81 @@ def logs(
 
 
 @app.command()
-def diagnose() -> None:
-    """Placeholder diagnose command."""
-    _not_implemented("diagnose")
+def diagnose(
+    lines: int = typer.Option(100, min=1, help="Number of recent Azure log lines to include."),
+    resource_group: str | None = typer.Option(None, help="Azure resource group name."),
+    app_name: str | None = typer.Option(None, help="Azure Web App name."),
+) -> None:
+    """Diagnose a deployment issue using recent Azure context and DeepSeek."""
+    names = deployment_target_names()
+    resolved_resource_group = resource_group or names["resource_group"]
+    resolved_app_name = app_name or names["app_name"]
+
+    try:
+        project_info = scan_project()
+        plan_steps = generate_deployment_plan(project_info)
+    except (DetectionError, ValueError) as exc:
+        console.print(Panel(str(exc), title="Diagnose Failed", border_style="red"))
+        raise typer.Exit(code=1) from exc
+
+    log_excerpt = ""
+    login_error = ""
+    try:
+        check_azure_login()
+        log_excerpt = get_recent_logs(resolved_resource_group, resolved_app_name, lines=lines)
+    except RuntimeError as exc:
+        login_error = str(exc)
+
+    context = {
+        "project_scan": project_info,
+        "deployment_plan_steps_attempted": [step["command"] for step in plan_steps],
+        "error_output": "\n\n".join(
+            part for part in (get_last_azure_error(), login_error) if part
+        ),
+        "log_excerpt": log_excerpt,
+        "key_files": _read_key_files(),
+    }
+
+    try:
+        with console.status("[bold blue]Analyzing deployment with DeepSeek...[/bold blue]", spinner="dots"):
+            result = run_diagnosis(context)
+    except RuntimeError as exc:
+        console.print(Panel(str(exc), title="Diagnose Failed", border_style="red"))
+        raise typer.Exit(code=1) from exc
+
+    confidence_style = {
+        "high": "black on green",
+        "medium": "black on yellow",
+        "low": "white on red",
+    }.get(result.confidence.lower(), "white on blue")
+    risk_icon = {
+        "low": "[green]i LOW[/green]",
+        "medium": "[yellow]! MEDIUM[/yellow]",
+        "high": "[red]!! HIGH[/red]",
+    }.get(result.risk_level.lower(), f"[blue]? {result.risk_level.upper()}[/blue]")
+
+    console.print(Panel(f"[bold]{result.root_cause}[/bold]", title="Root Cause", border_style="red"))
+    console.print(f"Confidence: [{confidence_style}] {result.confidence.upper()} [/]")
+    console.print(f"Risk: {risk_icon}")
+
+    if result.evidence:
+        console.print("\nEvidence:")
+        for item in result.evidence:
+            console.print(f"- {item}")
+
+    console.print(
+        Panel(result.recommended_fix, title="Recommended Fix", border_style="green")
+    )
+
+    if result.azure_commands:
+        console.print(
+            Panel("\n".join(result.azure_commands), title="Azure Commands", border_style="cyan")
+        )
+
+    if result.code_or_config_patch:
+        console.print(
+            Panel(result.code_or_config_patch, title="Code Or Config Patch", border_style="magenta")
+        )
 
 
 @app.command()

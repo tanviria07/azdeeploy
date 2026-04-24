@@ -1,11 +1,17 @@
 """Pydantic schemas for LLM interactions."""
 
+from typing import Optional
+
 from pydantic import BaseModel, Field
 
 
-class DiagnosisResult(BaseModel):
-    """Structured diagnosis result."""
+class Diagnosis(BaseModel):
+    """Structured deployment diagnosis."""
 
-    summary: str = Field(description="Short problem summary.")
-    root_cause: str = Field(description="Most likely root cause.")
-    next_steps: list[str] = Field(default_factory=list, description="Recommended next actions.")
+    root_cause: str
+    confidence: str
+    evidence: list[str] = Field(default_factory=list)
+    recommended_fix: str
+    azure_commands: list[str] = Field(default_factory=list)
+    code_or_config_patch: Optional[str] = None
+    risk_level: str
